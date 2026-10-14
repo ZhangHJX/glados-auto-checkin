@@ -19,6 +19,9 @@ const {
   isAlreadyCheckedIn,
   maskEmail,
   maskAccountLabel,
+  resolveDeviceProfile,
+  buildCheckinHeaders,
+  DEVICE_PROFILES,
 } = core;
 
 const { runCheckin, resolveOrigins, probeOriginsFor, main } = checkinCli;
@@ -619,6 +622,72 @@ function testWorkflowProbeInputDefaultsOff() {
   assert.match(text, /default:\s*false/);
 }
 
+function testRedactSecretsCoversBothSessionCookies() {
+  // Synthetic values only — real cookies must never enter source.
+  const gld = "gld:sess=gld_0000000000000000000000000000000000000000; gld:sess.sig=AAAAAAAAAAAAAAAAAAAAAAAAAA";
+  // Redaction must work from the patterns alone, without the raw secret passed in.
+  const gldOut = redactSecrets(`请求头：${gld}`);
+  assert.doesNotMatch(gldOut, /gld_00000000000000000000000000/);
+  assert.doesNotMatch(gldOut, /AAAAAAAAAAAAAAAAAAAAAAAAAA/);
+
+  const koaOut = redactSecrets("koa:sess=BBBBBBBBBBBBBBBBBBBB; koa:sess.sig=CCCCCCCCCCCCCCCC");
+  assert.doesNotMatch(koaOut, /BBBBBBBBBBBBBBBBBBBB/);
+  assert.doesNotMatch(koaOut, /CCCCCCCCCCCCCCCCCC/);
+}
+
+function testClassifyDeviceMismatch() {
+  const result = {
+    code: 4,
+    reason: "device-mismatch",
+    points: 0,
+    loginDevice: "macOS",
+    currentDevice: "Windows",
+    message: "Automated check-in detected. Please sign in again to continue.",
+    list: [],
+  };
+  const classified = classifyCheckin(result);
+  assert.equal(classified.kind, "device_mismatch");
+  assert.match(classified.message, /macOS/);
+  assert.match(classified.message, /Windows/);
+  assert.match(classified.message, /GLADOS_DEVICE/);
+  assert.equal(isSuccessfulOutcome(classified.kind), false);
+}
+
+function testResolveDeviceProfileChoices() {
+  // Default matches the most common sign-in device; a wrong default means code 4.
+  const fallback = resolveDeviceProfile({});
+  assert.equal(fallback.platform, DEVICE_PROFILES.macOS.platform);
+  assert.match(fallback.userAgent, /Macintosh/);
+
+  assert.match(resolveDeviceProfile({ GLADOS_DEVICE: "Windows" }).userAgent, /Windows NT/);
+  assert.equal(resolveDeviceProfile({ GLADOS_DEVICE: "Windows" }).platform, '"Windows"');
+  assert.match(resolveDeviceProfile({ GLADOS_DEVICE: "Linux" }).userAgent, /X11/);
+
+  // A raw UA wins, and the platform header follows from it.
+  const custom = resolveDeviceProfile({ GLADOS_UA: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/141" });
+  assert.equal(custom.userAgent, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/141");
+  assert.equal(custom.platform, '"macOS"');
+
+  // Unknown device fails loudly — silently falling back would repeat code 4.
+  assert.throws(() => resolveDeviceProfile({ GLADOS_DEVICE: "iPad" }), /GLADOS_DEVICE 不受支持/);
+}
+
+function testCheckinHeadersCarryBrowserFingerprint() {
+  const headers = buildCheckinHeaders(
+    "https://glados.cloud",
+    "gld:sess=synthetic",
+    "",
+    resolveDeviceProfile({})
+  );
+  assert.equal(headers.Origin, "https://glados.cloud");
+  assert.match(headers["User-Agent"], /Macintosh/);
+  assert.ok(headers["sec-ch-ua"]);
+  assert.equal(headers["sec-ch-ua-platform"], '"macOS"');
+  assert.equal(headers["Sec-Fetch-Mode"], "cors");
+  assert.equal(headers["Sec-Fetch-Site"], "same-origin");
+  assert.match(headers.Referer, /console\/checkin/);
+}
+
 async function run() {
   const tests = [
     ["parseAccounts JSON array", testParseAccountsJsonArray],
@@ -652,6 +721,10 @@ async function run() {
     ["probeOrigins respects pinned origin", testProbeOriginsRespectsPinnedOrigin],
     ["probe-all escape hatch reaches every host", testProbeAllOriginsReachesEveryHost],
     ["workflow probe input defaults off", testWorkflowProbeInputDefaultsOff],
+    ["redactSecrets covers both session cookies", testRedactSecretsCoversBothSessionCookies],
+    ["classifyCheckin detects device mismatch", testClassifyDeviceMismatch],
+    ["resolveDeviceProfile choices", testResolveDeviceProfileChoices],
+    ["check-in headers carry browser fingerprint", testCheckinHeadersCarryBrowserFingerprint],
   ];
 
   let failed = 0;

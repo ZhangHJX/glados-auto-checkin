@@ -33,6 +33,7 @@ const {
   buildStatusHeaders,
   maskEmail,
   maskAccountLabel,
+  resolveDeviceProfile,
   isSuccessfulOutcome,
 } = core;
 
@@ -210,7 +211,7 @@ function summarizeProbes(probes) {
  * re-narrow it — doing so silently collapses an opt-in full sweep back to the
  * single origin pinned in the Secret.
  */
-async function findLoggedInSession(account, request, origins) {
+async function findLoggedInSession(account, request, origins, device) {
   let lastError = null;
   let loginMessage = "";
   const probes = [];
@@ -218,7 +219,7 @@ async function findLoggedInSession(account, request, origins) {
   for (const origin of origins) {
     try {
       const response = await request("GET", `${origin}/api/user/status`, {
-        headers: buildStatusHeaders(origin, account.cookie, account.authorization),
+        headers: buildStatusHeaders(origin, account.cookie, account.authorization, device),
       });
       const status = response.json;
       if (status && status.code === 0 && status.data) {
@@ -258,10 +259,10 @@ async function findLoggedInSession(account, request, origins) {
  * Returns a formatted string, or undefined when unavailable/failed.
  * Never throws — the check-in outcome must not depend on this request.
  */
-async function fetchLiveBalance(origin, account, request, logger) {
+async function fetchLiveBalance(origin, account, request, logger, device) {
   try {
     const pointsResponse = await request("GET", `${origin}/api/user/points`, {
-      headers: buildStatusHeaders(origin, account.cookie, account.authorization),
+      headers: buildStatusHeaders(origin, account.cookie, account.authorization, device),
     });
     const pointsJson = pointsResponse.json;
     if (pointsJson && pointsJson.code === 0 && pointsJson.points !== undefined) {
@@ -280,7 +281,7 @@ async function fetchLiveBalance(origin, account, request, logger) {
  * Check in one account. Successful or already-checked outcomes are not repeated
  * within the same account object (`account._done`).
  */
-async function checkinAccount(account, request, origins, logger, secrets, env) {
+async function checkinAccount(account, request, origins, logger, secrets, env, device) {
   if (account._done) {
     logger.info(`[${labelFor(account)}] 本次运行已成功/已签到，跳过重复请求`);
     return {
@@ -297,7 +298,8 @@ async function checkinAccount(account, request, origins, logger, secrets, env) {
   const { origin, status } = await findLoggedInSession(
     account,
     request,
-    probeOriginsFor(account, env, origins)
+    probeOriginsFor(account, env, origins),
+    device
   );
   const email = maskEmail(status.data && status.data.email);
   const remaining = Number.parseInt(status.data && status.data.leftDays, 10);
@@ -306,7 +308,7 @@ async function checkinAccount(account, request, origins, logger, secrets, env) {
   logger.info(`[${labelFor(account)}] 使用域名 ${origin}（账户 ${email}）`);
 
   const checkinResponse = await request("POST", `${origin}/api/user/checkin`, {
-    headers: buildCheckinHeaders(origin, account.cookie, account.authorization),
+    headers: buildCheckinHeaders(origin, account.cookie, account.authorization, device),
     body: JSON.stringify({ token: checkinTokenForOrigin(origin) }),
   });
 
@@ -322,7 +324,7 @@ async function checkinAccount(account, request, origins, logger, secrets, env) {
   }
 
   // 实时可用积分优先于签到记录快照（兑换发生在签到之后时，快照会过期）。
-  const liveBalance = await fetchLiveBalance(origin, account, request, logger);
+  const liveBalance = await fetchLiveBalance(origin, account, request, logger, device);
   if (liveBalance !== undefined) {
     try {
       classified = classifyCheckin(checkinResponse.json, liveBalance);
@@ -404,6 +406,15 @@ async function runCheckin(options = {}) {
     return { ok: false, results: [], exitCode: 1, error: message };
   }
 
+  let device;
+  try {
+    device = resolveDeviceProfile(env);
+  } catch (error) {
+    const message = redactSecrets(error.message || String(error), secrets);
+    logger.error(message);
+    return { ok: false, results: [], exitCode: 1, error: message };
+  }
+
   const request = createRequester(fetchImpl, { sleep, timeoutMs: options.timeoutMs });
   const results = [];
   let failed = 0;
@@ -412,7 +423,7 @@ async function runCheckin(options = {}) {
 
   for (const account of accounts) {
     try {
-      const result = await checkinAccount(account, request, origins, logger, secrets, env);
+      const result = await checkinAccount(account, request, origins, logger, secrets, env, device);
       results.push(result);
       if (!isSuccessfulOutcome(result.kind)) {
         failed += 1;
