@@ -20,6 +20,7 @@ const {
   maskEmail,
   maskAccountLabel,
   resolveDeviceProfile,
+  profileForDeviceName,
   detectLegacyCookie,
   buildCheckinHeaders,
   DEVICE_PROFILES,
@@ -718,6 +719,63 @@ async function testLegacyCookieWarnsBeforeRequesting() {
   assert.match(logs, /koa:sess/);
 }
 
+function testProfileForDeviceName() {
+  assert.equal(profileForDeviceName("macOS"), DEVICE_PROFILES.macOS);
+  assert.equal(profileForDeviceName("Windows"), DEVICE_PROFILES.Windows);
+  assert.equal(profileForDeviceName("Linux"), DEVICE_PROFILES.Linux);
+  // Server capitalisation is not guaranteed.
+  assert.equal(profileForDeviceName("linux"), DEVICE_PROFILES.Linux);
+  // Unknown or missing values fail loudly rather than defaulting to a wrong guess.
+  assert.equal(profileForDeviceName("iPad"), null);
+  assert.equal(profileForDeviceName(""), null);
+}
+
+async function testDeviceMismatchRetriesWithCorrectedFingerprint() {
+  // Default profile is macOS, but the account signed in on Windows.
+  const checkinUas = [];
+  const fetchImpl = async (url, init = {}) => {
+    const target = String(url);
+    const ua = (init.headers || {})["User-Agent"] || "";
+    if (target.endsWith("/api/user/status")) {
+      return jsonResponse({
+        code: 0,
+        data: { email: "checkin-user@example.com", leftDays: 30 },
+      });
+    }
+    if (target.endsWith("/api/user/points")) {
+      return jsonResponse({ code: 0, points: 418 });
+    }
+    checkinUas.push(ua);
+    if (/Macintosh/.test(ua)) {
+      return jsonResponse({
+        code: 4,
+        reason: "device-mismatch",
+        loginDevice: "Windows",
+        currentDevice: "macOS",
+        message: "Automated check-in detected. Please sign in again to continue.",
+        list: [],
+      });
+    }
+    return jsonResponse({ code: 0, list: [{ change: 11, balance: 418 }], message: "ok" });
+  };
+
+  const logger = createLogger();
+  const outcome = await runCheckin({
+    env: { GLADOS_COOKIE: sampleCookie("dev") },
+    logger,
+    fetch: fetchImpl,
+    sleep: async () => {},
+  });
+
+  assert.equal(outcome.exitCode, 0);
+  assert.equal(outcome.results[0].kind, "success");
+  // Two check-in attempts: default macOS first, then the device the server named.
+  assert.equal(checkinUas.length, 2);
+  assert.match(checkinUas[0], /Macintosh/);
+  assert.match(checkinUas[1], /Windows NT/);
+  assert.match(logger.all(), /自动切换/);
+}
+
 async function run() {
   const tests = [
     ["parseAccounts JSON array", testParseAccountsJsonArray],
@@ -757,6 +815,8 @@ async function run() {
     ["check-in headers carry browser fingerprint", testCheckinHeadersCarryBrowserFingerprint],
     ["detectLegacyCookie flags koa-only credential", testDetectLegacyCookie],
     ["legacy cookie warns before requesting", testLegacyCookieWarnsBeforeRequesting],
+    ["profileForDeviceName resolves reported device", testProfileForDeviceName],
+    ["device mismatch retries with corrected fingerprint", testDeviceMismatchRetriesWithCorrectedFingerprint],
   ];
 
   let failed = 0;

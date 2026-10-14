@@ -35,6 +35,7 @@ const {
   maskAccountLabel,
   detectLegacyCookie,
   resolveDeviceProfile,
+  profileForDeviceName,
   isSuccessfulOutcome,
 } = core;
 
@@ -308,7 +309,7 @@ async function checkinAccount(account, request, origins, logger, secrets, env, d
 
   logger.info(`[${labelFor(account)}] 使用域名 ${origin}（账户 ${email}）`);
 
-  const checkinResponse = await request("POST", `${origin}/api/user/checkin`, {
+  let checkinResponse = await request("POST", `${origin}/api/user/checkin`, {
     headers: buildCheckinHeaders(origin, account.cookie, account.authorization, device),
     body: JSON.stringify({ token: checkinTokenForOrigin(origin) }),
   });
@@ -318,6 +319,27 @@ async function checkinAccount(account, request, origins, logger, secrets, env, d
     classified = classifyCheckin(checkinResponse.json);
   } catch (error) {
     throw createHttpError(error.message || String(error), 0);
+  }
+
+  // Self-heal a fingerprint mismatch. GLaDOS reports the device the account
+  // actually signed in on, so we can correct the profile and retry once rather
+  // than making the user guess and set GLADOS_DEVICE by hand.
+  if (classified.kind === "device_mismatch") {
+    const corrected = profileForDeviceName(classified.loginDevice);
+    if (corrected && corrected.userAgent !== device.userAgent) {
+      logger.info(
+        `[${labelFor(account)}] 设备指纹不匹配（登录设备 ${classified.loginDevice}），自动切换后重试`
+      );
+      checkinResponse = await request("POST", `${origin}/api/user/checkin`, {
+        headers: buildCheckinHeaders(origin, account.cookie, account.authorization, corrected),
+        body: JSON.stringify({ token: checkinTokenForOrigin(origin) }),
+      });
+      try {
+        classified = classifyCheckin(checkinResponse.json);
+      } catch (error) {
+        throw createHttpError(error.message || String(error), 0);
+      }
+    }
   }
 
   if (classified.kind === "login_expired") {
