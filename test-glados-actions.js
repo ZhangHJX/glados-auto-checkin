@@ -17,6 +17,8 @@ const {
   isSuccessfulOutcome,
   parseJsonBody,
   isAlreadyCheckedIn,
+  maskEmail,
+  maskAccountLabel,
 } = core;
 
 const { runCheckin, resolveOrigins, main } = checkinCli;
@@ -517,6 +519,50 @@ function testExistingScriptsUseDynamicToken() {
   assert.doesNotMatch(scriptcat, /token:\s*"glados\.(?:one|cloud)"/);
 }
 
+function testMaskAccountLabelMasksEmailLabels() {
+  // Email-shaped labels must never reach logs verbatim.
+  // Uses a synthetic address: real addresses must not enter source (AGENTS.md).
+  assert.equal(maskAccountLabel("checkin-user@example.com"), maskEmail("checkin-user@example.com"));
+  assert.equal(maskAccountLabel("checkin-user@example.com"), "ch***r@example.com");
+  assert.equal(maskAccountLabel("ab@x.io"), "***@x.io");
+  // Ordinary labels stay readable so multi-account logs remain useful.
+  assert.equal(maskAccountLabel("主号"), "主号");
+  assert.equal(maskAccountLabel(""), "");
+  assert.equal(maskAccountLabel(undefined), "");
+  // Non-email text containing an @ is left alone.
+  assert.equal(maskAccountLabel("team @ ops"), "team @ ops");
+}
+
+async function testEmailNamedAccountNeverLeaksInLogs() {
+  const email = "checkin-user@example.com";
+  const handlers = GLADOS_ORIGINS.map(() => jsonResponse({ code: -2, message: "没有权限" }));
+  const logger = createLogger();
+
+  const outcome = await runCheckin({
+    env: { GLADOS_COOKIE: JSON.stringify([{ name: email, cookie: sampleCookie("e") }]) },
+    logger,
+    fetch: buildFetch(handlers),
+    sleep: async () => {},
+  });
+
+  assert.equal(outcome.exitCode, 1);
+
+  const logs = logger.all();
+  // Full address must never appear; the masked label should.
+  assert.doesNotMatch(logs, /checkin-user@example\.com/);
+  assert.match(logs, /ch\*\*\*r@example\.com/);
+  // Failure output must be actionable: what was probed, and what to do next.
+  assert.match(logs, /已探测 7 个域名/);
+  assert.match(logs, /域名探测结果/);
+  assert.match(logs, /没有权限/);
+  assert.match(logs, /处理建议/);
+  assert.match(logs, /GLADOS_COOKIE/);
+  // Every probed origin is named so one dead domain stays distinguishable.
+  for (const origin of GLADOS_ORIGINS) {
+    assert.match(logs, new RegExp(new URL(origin).hostname.replace(/\./g, "\\.")));
+  }
+}
+
 async function run() {
   const tests = [
     ["parseAccounts JSON array", testParseAccountsJsonArray],
@@ -545,6 +591,8 @@ async function run() {
     ["workflow YAML structure", testWorkflowYamlStructure],
     ["package scripts/version", testPackageScriptsAndVersion],
     ["existing scripts dynamic token", testExistingScriptsUseDynamicToken],
+    ["maskAccountLabel masks email labels", testMaskAccountLabelMasksEmailLabels],
+    ["email-named account never leaks in logs", testEmailNamedAccountNeverLeaksInLogs],
   ];
 
   let failed = 0;

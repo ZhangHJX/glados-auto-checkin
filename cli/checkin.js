@@ -32,8 +32,24 @@ const {
   buildCheckinHeaders,
   buildStatusHeaders,
   maskEmail,
+  maskAccountLabel,
   isSuccessfulOutcome,
 } = core;
+
+/**
+ * Actionable guidance appended whenever every origin rejects the credential.
+ * Kept free of "=" pairs so redactSecrets cannot mangle the hint text.
+ */
+const COOKIE_REFRESH_HINT =
+  "处理建议：Cookie 会在数周后失效。请在 GLaDOS 网页重新登录，从请求标头复制完整 Cookie 值（含 koa:sess 与 koa:sess.sig 两个字段），更新 Repository Secret `GLADOS_COOKIE`。";
+
+/**
+ * Log-safe account label. Users often name an account after its email address;
+ * logs must never carry the full address, so email-shaped labels are masked.
+ */
+function labelFor(account) {
+  return maskAccountLabel(account && account.name) || "未知账号";
+}
 
 function defaultLogger() {
   return {
@@ -136,6 +152,39 @@ function readCookieSecret(env) {
   return raw;
 }
 
+function hostOf(origin) {
+  try {
+    return new URL(origin).hostname;
+  } catch (error) {
+    return String(origin || "未知域名");
+  }
+}
+
+/**
+ * Collapse per-origin probe failures into a compact, log-safe summary.
+ * Identical server messages are grouped so a 7-domain sweep stays one line.
+ */
+function summarizeProbes(probes) {
+  if (!probes.length) {
+    return "";
+  }
+
+  const groups = new Map();
+  for (const probe of probes) {
+    const key = probe.message || "未知原因";
+    if (!groups.has(key)) {
+      groups.set(key, []);
+    }
+    groups.get(key).push(hostOf(probe.origin));
+  }
+
+  const lines = [];
+  for (const [message, hosts] of groups) {
+    lines.push(`  - ${hosts.join("、")}：${message}`);
+  }
+  return `域名探测结果：\n${lines.join("\n")}`;
+}
+
 /**
  * Probe origins until /api/user/status reports a logged-in session.
  * Check-in always uses the same origin that answered successfully.
@@ -144,6 +193,7 @@ async function findLoggedInSession(account, request, origins) {
   let lastError = null;
   let loginMessage = "";
   const accountOrigins = account.origin ? [account.origin] : origins;
+  const probes = [];
 
   for (const origin of accountOrigins) {
     try {
@@ -152,21 +202,33 @@ async function findLoggedInSession(account, request, origins) {
       });
       const status = response.json;
       if (status && status.code === 0 && status.data) {
-        return { origin, status };
+        return { origin, status, probes };
       }
       loginMessage = (status && status.message) || loginMessage;
       lastError = createHttpError(status && status.message ? status.message : "未登录", 0);
+      probes.push({ origin, message: lastError.message });
     } catch (error) {
       lastError = error;
+      probes.push({ origin, message: (error && error.message) || "请求失败" });
       // 401/403 on one domain does not stop probing others (cookies are not shared).
     }
   }
 
+  const header = `已探测 ${probes.length} 个域名`;
+  const detail = summarizeProbes(probes);
+  const suffix = detail ? `\n${detail}` : "";
+
   if (loginMessage) {
-    throw createHttpError(`需要登录：${loginMessage}`, lastError && lastError.status);
+    throw createHttpError(
+      `需要登录：${loginMessage}（${header}）${suffix}\n${COOKIE_REFRESH_HINT}`,
+      lastError && lastError.status
+    );
   }
   if (lastError) {
-    throw lastError;
+    throw createHttpError(
+      `所有 GLaDOS 主站域名均未读取到登录状态（${header}）${suffix}\n${COOKIE_REFRESH_HINT}`,
+      lastError.status
+    );
   }
   throw createHttpError("所有 GLaDOS 主站域名均未读取到登录状态", 0);
 }
@@ -188,7 +250,7 @@ async function fetchLiveBalance(origin, account, request, logger) {
     return undefined;
   } catch (error) {
     logger.info(
-      `[${account.name}] 实时积分查询失败（沿用签到记录余额）：${error.message || String(error)}`
+      `[${labelFor(account)}] 实时积分查询失败（沿用签到记录余额）：${error.message || String(error)}`
     );
     return undefined;
   }
@@ -200,7 +262,7 @@ async function fetchLiveBalance(origin, account, request, logger) {
  */
 async function checkinAccount(account, request, origins, logger, secrets) {
   if (account._done) {
-    logger.info(`[${account.name}] 本次运行已成功/已签到，跳过重复请求`);
+    logger.info(`[${labelFor(account)}] 本次运行已成功/已签到，跳过重复请求`);
     return {
       name: account.name,
       kind: account._done.kind,
@@ -217,7 +279,7 @@ async function checkinAccount(account, request, origins, logger, secrets) {
   const remaining = Number.parseInt(status.data && status.data.leftDays, 10);
   const remainingDays = Number.isFinite(remaining) ? remaining : null;
 
-  logger.info(`[${account.name}] 使用域名 ${origin}（账户 ${email}）`);
+  logger.info(`[${labelFor(account)}] 使用域名 ${origin}（账户 ${email}）`);
 
   const checkinResponse = await request("POST", `${origin}/api/user/checkin`, {
     headers: buildCheckinHeaders(origin, account.cookie, account.authorization),
@@ -257,7 +319,7 @@ async function checkinAccount(account, request, origins, logger, secrets) {
   };
 
   logger.info(
-    redactSecrets(`[${account.name}] ${email} · ${summary.replace(/\n/g, "，")}`, secrets)
+    redactSecrets(`[${labelFor(account)}] ${email} · ${summary.replace(/\n/g, "，")}`, secrets)
   );
 
   return {
@@ -335,7 +397,7 @@ async function runCheckin(options = {}) {
       failed += 1;
       const status = error && error.status ? ` (HTTP ${error.status})` : "";
       const message = redactSecrets(
-        `[${account.name}] 签到失败${status}：${error.message || String(error)}`,
+        `[${labelFor(account)}] 签到失败${status}：${error.message || String(error)}`,
         secrets
       );
       logger.error(message);
