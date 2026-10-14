@@ -164,8 +164,8 @@ curl -fsSL 'https://raw.githubusercontent.com/Walvez/glados-auto-checkin/refs/he
 
 ```json
 [
-  {"name": "主号", "origin": "https://glados.cloud", "cookie": "koa:sess=...; koa:sess.sig=..."},
-  {"name": "小号", "origin": "https://glados.rocks", "cookie": "koa:sess=...; koa:sess.sig=..."}
+  {"name": "主号", "origin": "https://glados.cloud", "cookie": "gld:sess=...; gld:sess.sig=..."},
+  {"name": "小号", "origin": "https://glados.rocks", "cookie": "gld:sess=...; gld:sess.sig=..."}
 ]
 ```
 
@@ -177,7 +177,7 @@ curl -fsSL 'https://raw.githubusercontent.com/Walvez/glados-auto-checkin/refs/he
 | :--- | :---: | :--- |
 | `name` | 否 | 仅用于在脱敏日志中区分账号，例如“主号”“小号” |
 | `origin` | 推荐 | 该 Cookie 实际来自哪个主站；填写后只向这个官方域名发送凭据 |
-| `cookie` | 是 | 从浏览器请求标头复制的完整 Cookie 值 |
+| `cookie` | 是 | 完整 Cookie 值，**必须包含 `gld:sess` 与 `gld:sess.sig`** 两个字段 |
 
 `origin` 只接受本项目支持的 7 个 HTTPS 主站。省略后会自动探测全部主站，但不同域名分别登录不同账号时，建议明确填写。
 
@@ -187,12 +187,12 @@ curl -fsSL 'https://raw.githubusercontent.com/Walvez/glados-auto-checkin/refs/he
 单账号可以直接填写一整段 Cookie；多账号也支持 Cookie 字符串 JSON 数组或每行一个完整 Cookie：
 
 ```json
-["koa:sess=账号1...; koa:sess.sig=...", "koa:sess=账号2...; koa:sess.sig=..."]
+["gld:sess=账号1...; gld:sess.sig=...", "gld:sess=账号2...; gld:sess.sig=..."]
 ```
 
 ```text
-koa:sess=账号1...; koa:sess.sig=...
-koa:sess=账号2...; koa:sess.sig=...
+gld:sess=账号1...; gld:sess.sig=...
+gld:sess=账号2...; gld:sess.sig=...
 ```
 
 不要使用 `&` 分隔账号，因为 Cookie 值本身可能包含 `&`。空 Secret、非法 JSON 或缺少凭据会直接报错，日志不会打印完整 Cookie。
@@ -232,7 +232,7 @@ koa:sess=账号2...; koa:sess.sig=...
 需要 Node.js 18+（Actions 固定当前 LTS 大版本 **24**）：
 
 ```bash
-export GLADOS_COOKIE='koa:sess=...; koa:sess.sig=...'
+export GLADOS_COOKIE='gld:sess=...; gld:sess.sig=...'
 npm run checkin
 # 或：node cli/checkin.js
 ```

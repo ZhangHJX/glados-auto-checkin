@@ -33,6 +33,7 @@ const {
   buildStatusHeaders,
   maskEmail,
   maskAccountLabel,
+  detectLegacyCookie,
   resolveDeviceProfile,
   isSuccessfulOutcome,
 } = core;
@@ -418,6 +419,17 @@ async function runCheckin(options = {}) {
   const request = createRequester(fetchImpl, { sleep, timeoutMs: options.timeoutMs });
   const results = [];
   let failed = 0;
+
+  // Warn before spending a network round-trip on a credential the server will
+  // reject anyway.
+  for (const account of accounts) {
+    if (account.cookie) {
+      const legacyHint = detectLegacyCookie(account.cookie);
+      if (legacyHint) {
+        logger.warn(`[${labelFor(account)}] 警告：${legacyHint}`);
+      }
+    }
+  }
 
   logger.info(`GLaDOS 签到开始：${accounts.length} 个账号，候选域名 ${origins.length} 个`);
 

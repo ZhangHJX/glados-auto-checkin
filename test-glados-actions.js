@@ -20,6 +20,7 @@ const {
   maskEmail,
   maskAccountLabel,
   resolveDeviceProfile,
+  detectLegacyCookie,
   buildCheckinHeaders,
   DEVICE_PROFILES,
 } = core;
@@ -688,6 +689,35 @@ function testCheckinHeadersCarryBrowserFingerprint() {
   assert.match(headers.Referer, /console\/checkin/);
 }
 
+function testDetectLegacyCookie() {
+  // Only the legacy pair -> warn, this is the exact failure seen in production.
+  assert.match(detectLegacyCookie("koa:sess=AAAAAAAA; koa:sess.sig=BBBBBBBB"), /gld:sess/);
+  // Current pair -> quiet.
+  assert.equal(detectLegacyCookie("gld:sess=CCCCCCCC; gld:sess.sig=DDDDDDDD"), null);
+  // Both present -> quiet; the script simply ignores the stale one.
+  assert.equal(detectLegacyCookie("gld:sess=CCCCCCCC; koa:sess=AAAAAAAA"), null);
+  // Authorization-only accounts must not be false-flagged.
+  assert.equal(detectLegacyCookie(""), null);
+}
+
+async function testLegacyCookieWarnsBeforeRequesting() {
+  const logger = createLogger();
+  const handlers = GLADOS_ORIGINS.map(() => jsonResponse({ code: -2, message: "没有权限" }));
+
+  const outcome = await runCheckin({
+    env: { GLADOS_COOKIE: "koa:sess=AAAAAAAA; koa:sess.sig=BBBBBBBB" },
+    logger,
+    fetch: buildFetch(handlers),
+    sleep: async () => {},
+  });
+
+  assert.equal(outcome.exitCode, 1);
+  const logs = logger.all();
+  assert.match(logs, /警告/);
+  assert.match(logs, /gld:sess/);
+  assert.match(logs, /koa:sess/);
+}
+
 async function run() {
   const tests = [
     ["parseAccounts JSON array", testParseAccountsJsonArray],
@@ -725,6 +755,8 @@ async function run() {
     ["classifyCheckin detects device mismatch", testClassifyDeviceMismatch],
     ["resolveDeviceProfile choices", testResolveDeviceProfileChoices],
     ["check-in headers carry browser fingerprint", testCheckinHeadersCarryBrowserFingerprint],
+    ["detectLegacyCookie flags koa-only credential", testDetectLegacyCookie],
+    ["legacy cookie warns before requesting", testLegacyCookieWarnsBeforeRequesting],
   ];
 
   let failed = 0;

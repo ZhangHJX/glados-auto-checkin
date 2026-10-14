@@ -134,17 +134,25 @@ Use this when you do not want a browser, Surge, or Quantumult X running locally.
 Repeat these steps for every account:
 
 1. Sign in on the main-site domain you plan to use, such as [glados.cloud](https://glados.cloud) or [glados.rocks](https://glados.rocks).
-2. Press `F12`, open **Network**, and refresh the GLaDOS page.
-3. Select a request such as `/api/user/status` or `/console` that was sent to the current GLaDOS domain.
-4. Under **Request Headers**, find `Cookie` and copy its **value only**, without the `Cookie:` prefix. It normally resembles:
+2. Press `F12`, open the **Application** panel, and expand **Storage → Cookie → the current GLaDOS domain**.
+3. Copy the **values** of the `gld:sess` and `gld:sess.sig` rows and join them into one line:
 
    ```text
-   koa:sess=...; koa:sess.sig=...
+   gld:sess=...; gld:sess.sig=...
    ```
 
-5. Record the current domain as well. For multiple accounts, copy each cookie from the domain where that account is signed in.
+   > The site now stores the session in `gld:sess`; the legacy `koa:sess` is ignored by
+   > the server. If both are present you may copy them together.
 
-A cookie is a login credential and may expire after several weeks. Never publish it or send it to another person.
+4. Record the current domain as well. For multiple accounts, copy each cookie from the domain where that account is signed in.
+
+`gld:sess` is a login credential and typically expires in about **14 days** (see the Expires column in the Application panel). Never publish it or send it to another person.
+
+> **The device fingerprint must match the device you signed in with.** GLaDOS compares the
+> request fingerprint against the sign-in device and rejects the check-in with
+> `device-mismatch` when they differ. Actions uses a macOS fingerprint by default; if you
+> signed in on Windows or Linux, create a repository variable `GLADOS_DEVICE` under
+> **Settings → Secrets and variables → Variables** with the value `Windows` or `Linux`.
 
 #### 3. Create the `GLADOS_COOKIE` Secret
 
@@ -155,8 +163,8 @@ A cookie is a login credential and may expire after several weeks. Never publish
 
 ```json
 [
-  {"name": "primary", "origin": "https://glados.cloud", "cookie": "koa:sess=...; koa:sess.sig=..."},
-  {"name": "secondary", "origin": "https://glados.rocks", "cookie": "koa:sess=...; koa:sess.sig=..."}
+  {"name": "primary", "origin": "https://glados.cloud", "cookie": "gld:sess=...; gld:sess.sig=..."},
+  {"name": "secondary", "origin": "https://glados.rocks", "cookie": "gld:sess=...; gld:sess.sig=..."}
 ]
 ```
 
@@ -176,12 +184,12 @@ A cookie is a login credential and may expire after several weeks. Never publish
 A single raw cookie, a JSON array of cookie strings, and one full cookie per line are also supported:
 
 ```json
-["koa:sess=account1...; koa:sess.sig=...", "koa:sess=account2...; koa:sess.sig=..."]
+["gld:sess=account1...; gld:sess.sig=...", "gld:sess=account2...; gld:sess.sig=..."]
 ```
 
 ```text
-koa:sess=account1...; koa:sess.sig=...
-koa:sess=account2...; koa:sess.sig=...
+gld:sess=account1...; gld:sess.sig=...
+gld:sess=account2...; gld:sess.sig=...
 ```
 
 Do not use `&` as an account separator because cookie values may contain it. Empty or invalid input fails fast, and logs never print complete cookies.
@@ -221,7 +229,7 @@ Sign in again on the corresponding domain, copy the new cookie, then edit the ex
 Requires Node.js 18+ (Actions pins current LTS major **24**):
 
 ```bash
-export GLADOS_COOKIE='koa:sess=...; koa:sess.sig=...'
+export GLADOS_COOKIE='gld:sess=...; gld:sess.sig=...'
 npm run checkin
 # or: node cli/checkin.js
 ```
