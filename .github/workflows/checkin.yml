@@ -17,6 +17,11 @@ on:
     # 15:15 Beijing (UTC+8) = 07:15 UTC
     - cron: "15 7 * * *"
   workflow_dispatch:
+    inputs:
+      probe_all_origins:
+        description: "排查用：忽略 Secret 中锁定的 origin，改为探测全部 7 个主站域名"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -40,4 +45,6 @@ jobs:
         env:
           # Repository Secret — never echo or print this value.
           GLADOS_COOKIE: ${{ secrets.GLADOS_COOKIE }}
+          # Opt-in diagnostic escape hatch; empty on scheduled runs.
+          GLADOS_PROBE_ALL_ORIGINS: ${{ inputs.probe_all_origins && '1' || '' }}
         run: node cli/checkin.js

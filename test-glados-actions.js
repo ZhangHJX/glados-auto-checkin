@@ -21,7 +21,7 @@ const {
   maskAccountLabel,
 } = core;
 
-const { runCheckin, resolveOrigins, main } = checkinCli;
+const { runCheckin, resolveOrigins, probeOriginsFor, main } = checkinCli;
 
 function createLogger() {
   const lines = { info: [], warn: [], error: [] };
@@ -563,6 +563,62 @@ async function testEmailNamedAccountNeverLeaksInLogs() {
   }
 }
 
+function testProbeOriginsRespectsPinnedOrigin() {
+  const pinned = {
+    name: "pinned",
+    cookie: sampleCookie("p"),
+    authorization: "",
+    origin: "https://glados.cloud",
+  };
+
+  // Default: a Secret-pinned origin is never widened.
+  assert.deepEqual(probeOriginsFor(pinned, {}, GLADOS_ORIGINS), ["https://glados.cloud"]);
+  // Scheduled runs pass an empty string, which must stay closed.
+  assert.deepEqual(probeOriginsFor(pinned, { GLADOS_PROBE_ALL_ORIGINS: "" }, GLADOS_ORIGINS), [
+    "https://glados.cloud",
+  ]);
+  // Explicit opt-in widens to every supported host.
+  assert.deepEqual(probeOriginsFor(pinned, { GLADOS_PROBE_ALL_ORIGINS: "1" }, GLADOS_ORIGINS), [
+    ...GLADOS_ORIGINS,
+  ]);
+  // Accounts without a pinned origin already probe everything.
+  const unpinned = { name: "any", cookie: sampleCookie("u"), authorization: "", origin: "" };
+  assert.deepEqual(probeOriginsFor(unpinned, {}, GLADOS_ORIGINS), [...GLADOS_ORIGINS]);
+}
+
+async function testProbeAllOriginsReachesEveryHost() {
+  const env = {
+    GLADOS_COOKIE: JSON.stringify([
+      { name: "pinned", cookie: sampleCookie("p"), origin: "https://glados.cloud" },
+    ]),
+    GLADOS_PROBE_ALL_ORIGINS: "1",
+  };
+  const handlers = GLADOS_ORIGINS.map(() => jsonResponse({ code: -2, message: "没有权限" }));
+  const fetchImpl = buildFetch(handlers);
+
+  const outcome = await runCheckin({
+    env,
+    logger: createLogger(),
+    fetch: fetchImpl,
+    sleep: async () => {},
+  });
+
+  assert.equal(outcome.exitCode, 1);
+  const hosts = fetchImpl.calls.map((call) => new URL(call.url).hostname);
+  assert.equal(hosts.length, GLADOS_ORIGINS.length);
+  for (const origin of GLADOS_ORIGINS) {
+    assert.ok(hosts.includes(new URL(origin).hostname), `missing host: ${origin}`);
+  }
+}
+
+function testWorkflowProbeInputDefaultsOff() {
+  const text = fs.readFileSync(path.join(__dirname, ".github/workflows/checkin.yml"), "utf8");
+  assert.match(text, /probe_all_origins/);
+  assert.match(text, /GLADOS_PROBE_ALL_ORIGINS/);
+  // Credentials must not be broadcast wider on unattended scheduled runs.
+  assert.match(text, /default:\s*false/);
+}
+
 async function run() {
   const tests = [
     ["parseAccounts JSON array", testParseAccountsJsonArray],
@@ -593,6 +649,9 @@ async function run() {
     ["existing scripts dynamic token", testExistingScriptsUseDynamicToken],
     ["maskAccountLabel masks email labels", testMaskAccountLabelMasksEmailLabels],
     ["email-named account never leaks in logs", testEmailNamedAccountNeverLeaksInLogs],
+    ["probeOrigins respects pinned origin", testProbeOriginsRespectsPinnedOrigin],
+    ["probe-all escape hatch reaches every host", testProbeAllOriginsReachesEveryHost],
+    ["workflow probe input defaults off", testWorkflowProbeInputDefaultsOff],
   ];
 
   let failed = 0;

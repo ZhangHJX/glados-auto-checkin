@@ -152,6 +152,23 @@ function readCookieSecret(env) {
   return raw;
 }
 
+/**
+ * Origins this account is allowed to probe.
+ *
+ * A cookie is issued per hostname, so a Secret that pins `origin` is normally
+ * respected and never widened. `GLADOS_PROBE_ALL_ORIGINS=1` is an explicit
+ * opt-in escape hatch for one situation: the pinned origin is wrong (the cookie
+ * was copied from a different GLaDOS host), which otherwise looks identical to
+ * an expired cookie. Unsetting `origin` in the Secret is the preferred fix.
+ */
+function probeOriginsFor(account, env, origins) {
+  const forced = String((env && env.GLADOS_PROBE_ALL_ORIGINS) || "").trim();
+  if (forced === "1" || /^true$/i.test(forced)) {
+    return origins;
+  }
+  return account.origin ? [account.origin] : origins;
+}
+
 function hostOf(origin) {
   try {
     return new URL(origin).hostname;
@@ -188,14 +205,17 @@ function summarizeProbes(probes) {
 /**
  * Probe origins until /api/user/status reports a logged-in session.
  * Check-in always uses the same origin that answered successfully.
+ *
+ * The caller owns the probe scope (see probeOriginsFor). This function must not
+ * re-narrow it — doing so silently collapses an opt-in full sweep back to the
+ * single origin pinned in the Secret.
  */
 async function findLoggedInSession(account, request, origins) {
   let lastError = null;
   let loginMessage = "";
-  const accountOrigins = account.origin ? [account.origin] : origins;
   const probes = [];
 
-  for (const origin of accountOrigins) {
+  for (const origin of origins) {
     try {
       const response = await request("GET", `${origin}/api/user/status`, {
         headers: buildStatusHeaders(origin, account.cookie, account.authorization),
@@ -260,7 +280,7 @@ async function fetchLiveBalance(origin, account, request, logger) {
  * Check in one account. Successful or already-checked outcomes are not repeated
  * within the same account object (`account._done`).
  */
-async function checkinAccount(account, request, origins, logger, secrets) {
+async function checkinAccount(account, request, origins, logger, secrets, env) {
   if (account._done) {
     logger.info(`[${labelFor(account)}] 本次运行已成功/已签到，跳过重复请求`);
     return {
@@ -274,7 +294,11 @@ async function checkinAccount(account, request, origins, logger, secrets) {
     };
   }
 
-  const { origin, status } = await findLoggedInSession(account, request, origins);
+  const { origin, status } = await findLoggedInSession(
+    account,
+    request,
+    probeOriginsFor(account, env, origins)
+  );
   const email = maskEmail(status.data && status.data.email);
   const remaining = Number.parseInt(status.data && status.data.leftDays, 10);
   const remainingDays = Number.isFinite(remaining) ? remaining : null;
@@ -388,7 +412,7 @@ async function runCheckin(options = {}) {
 
   for (const account of accounts) {
     try {
-      const result = await checkinAccount(account, request, origins, logger, secrets);
+      const result = await checkinAccount(account, request, origins, logger, secrets, env);
       results.push(result);
       if (!isSuccessfulOutcome(result.kind)) {
         failed += 1;
@@ -463,6 +487,7 @@ module.exports = {
   createRequester,
   findLoggedInSession,
   checkinAccount,
+  probeOriginsFor,
   resolveOrigins,
   readCookieSecret,
   defaultLogger,
