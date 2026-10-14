@@ -45,6 +45,10 @@ jobs:
         env:
           # Repository Secret — never echo or print this value.
           GLADOS_COOKIE: ${{ secrets.GLADOS_COOKIE }}
+          # Optional Repository Variable. Set to Windows/Linux if you signed in
+          # on that platform — GLaDOS rejects a mismatched device fingerprint.
+          # Unset defaults to macOS.
+          GLADOS_DEVICE: ${{ vars.GLADOS_DEVICE }}
           # Opt-in diagnostic escape hatch; empty on scheduled runs.
           GLADOS_PROBE_ALL_ORIGINS: ${{ inputs.probe_all_origins && '1' || '' }}
         run: node cli/checkin.js

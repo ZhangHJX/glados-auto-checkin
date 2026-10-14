@@ -135,16 +135,25 @@ curl -fsSL 'https://raw.githubusercontent.com/Walvez/glados-auto-checkin/refs/he
 
 1. 在准备使用的主站域名登录该账号，例如 [glados.cloud](https://glados.cloud) 或 [glados.rocks](https://glados.rocks)。
 2. 按 `F12` 打开开发者工具，切换到 **Network（网络）**。
-3. 刷新 GLaDOS 页面，点开 `/api/user/status`、`/console` 等发送到当前 GLaDOS 域名的请求。
-4. 在 **Request Headers（请求标头）** 中找到 `Cookie`，复制它的**值**，不要带 `Cookie:` 前缀。通常类似：
+3. 切换到 **Application（应用）** 面板，依次展开 **存储 → Cookie → 当前 GLaDOS 域名**。
+4. 复制 `gld:sess` 与 `gld:sess.sig` 两行的**值**，拼成一行：
 
    ```text
-   koa:sess=……; koa:sess.sig=……
+   gld:sess=……; gld:sess.sig=……
    ```
+
+   > 站点现已改用 `gld:sess` 保存登录态，旧的 `koa:sess` 已被服务端忽略。
+   > 两者同时存在时可以一并复制，脚本会忽略无效项。
 
 5. 同时记下当前域名。多个账号应分别登录不同域名并分别复制，例如主号来自 `glados.cloud`、小号来自 `glados.rocks`。
 
-Cookie 相当于登录凭据，并且可能在数周后失效。不要截图公开，也不要发送给其他人。
+`gld:sess` 相当于登录凭据，有效期约 **14 天**（在应用面板的 Expires 列可见具体日期）。不要截图公开，也不要发送给其他人。
+
+> **设备指纹必须与你登录时所用设备一致**：GLaDOS 会比对请求的浏览器指纹与登录设备，
+> 不一致时判定为自动化签到并返回 `device-mismatch` 拒绝。Actions 默认使用 macOS 指纹；
+> 若你是在 Windows 或 Linux 上登录的，请在仓库 **Settings → Secrets and variables → Variables**
+> 新建变量 `GLADOS_DEVICE`，值为 `Windows` 或 `Linux`。也可用 `GLADOS_UA` 直接指定完整 User-Agent
+> （需自行改入 workflow 的 env）。
 
 #### 3. 创建 `GLADOS_COOKIE` Secret
 
