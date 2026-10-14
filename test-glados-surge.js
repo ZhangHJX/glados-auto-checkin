@@ -353,7 +353,7 @@ async function testCronSigninWithAuthorizationOnly() {
   assert.equal(postOptions.url, "https://glados.rocks/api/user/checkin");
   assert.equal(postOptions.headers.Origin, "https://glados.rocks");
   assert.equal(result.doneValue.status, "already_checked");
-  assert.equal(result.doneValue.version, "reliability-20260718-dynamic-token");
+  assert.equal(result.doneValue.version, "reliability-20260826-checkin-record-filter");
 }
 
 async function testCodeOneWithoutPointsOrMessageIsAlreadyCheckedIn() {
@@ -378,6 +378,106 @@ async function testCodeOneWithoutPointsOrMessageIsAlreadyCheckedIn() {
 
   assert.equal(result.doneValue.status, "already_checked");
   assert.match(result.notifications[0].body, /今日已签到/);
+}
+
+async function testAlreadyCheckedInIgnoresNewerExchangeRecord() {
+  // 兑换后（如 100 积分 → 10 天）list[0] 是兑换流水：不得当成签到所得显示。
+  const result = await runScript({
+    store: {
+      evil_gladoscookie: "session=test",
+      evil_gladosorigin: "https://glados.network",
+    },
+    $httpClient: {
+      post: (_options, callback) => {
+        callback(
+          null,
+          { status: 200 },
+          JSON.stringify({
+            code: 1,
+            points: 0,
+            message: "Today's observation logged. Return tomorrow for more points.",
+            list: [
+              {
+                business: "system:ex:plan100:2026-08-26",
+                change: "-100.00000000",
+                balance: "194.0000000000000000",
+                detail: "exchange 100 points for 10 days",
+              },
+              {
+                business: "system:checkin",
+                change: "4.00000000",
+                balance: "294.0000000000000000",
+                detail: "2026-08-26",
+              },
+            ],
+          })
+        );
+      },
+      get: (options, callback) => {
+        if (options.url.endsWith("/api/user/points")) {
+          return callback(
+            null,
+            { status: 200 },
+            JSON.stringify({ code: 0, points: "194.0000000000000000" })
+          );
+        }
+        callback(
+          null,
+          { status: 200 },
+          JSON.stringify({ code: 0, data: { email: "user@example.com", leftDays: "42.0000000000000000" } })
+        );
+      },
+    },
+  });
+
+  assert.equal(result.doneValue.status, "already_checked");
+  assert.match(result.notifications[0].body, /今日已签到/);
+  assert.match(result.notifications[0].body, /今日签到获得4积分/);
+  assert.match(result.notifications[0].body, /共194积分/);
+  assert.doesNotMatch(result.notifications[0].body, /-100/);
+}
+
+async function testExchangeOnlyListDoesNotPassAsCheckin() {
+  const result = await runScript({
+    store: {
+      evil_gladoscookie: "session=test",
+      evil_gladosorigin: "https://glados.rocks",
+    },
+    $httpClient: {
+      post: (_options, callback) => {
+        callback(
+          null,
+          { status: 200 },
+          JSON.stringify({
+            code: 1,
+            message: "Today's observation logged. Return tomorrow for more points.",
+            list: [{
+              business: "system:ex:plan500:2026-07-19",
+              change: "-500.00000000",
+              balance: "12.0000000000000000",
+            }],
+          })
+        );
+      },
+      get: (options, callback) => {
+        if (options.url.endsWith("/api/user/points")) {
+          return callback(
+            null,
+            { status: 200 },
+            JSON.stringify({ code: 0, points: "12.0000000000000000" })
+          );
+        }
+        callback(
+          null,
+          { status: 200 },
+          JSON.stringify({ code: 0, data: { email: "user@example.com", leftDays: 30 } })
+        );
+      },
+    },
+  });
+
+  assert.equal(result.doneValue.status, "already_checked");
+  assert.doesNotMatch(result.notifications[0].body, /获得-500|共-?500积分.*获得/);
 }
 
 async function testCronSignin() {
@@ -419,7 +519,7 @@ async function testCronSignin() {
   assert.match(result.notifications[0].body, /剩余34天/);
   assert.deepEqual(result.doneValue, {
     status: "ok",
-    version: "reliability-20260718-dynamic-token",
+    version: "reliability-20260826-checkin-record-filter",
     checkinMessage: "签到成功！\n今日签到获得10积分，共128积分",
     remainingDays: 34,
   });
@@ -668,6 +768,8 @@ const resultNotifications = [];
   await testCronSigninFormatsDecimalPoints();
   await testCronSigninWithAuthorizationOnly();
   await testCodeOneWithoutPointsOrMessageIsAlreadyCheckedIn();
+  await testAlreadyCheckedInIgnoresNewerExchangeRecord();
+  await testExchangeOnlyListDoesNotPassAsCheckin();
   await testIgnoresUnsupportedOrigins();
   await testMissingCredentialsMentionsAllMainDomains();
   await testQuantumultXRuntime();

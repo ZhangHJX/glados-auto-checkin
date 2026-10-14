@@ -391,6 +391,69 @@ async function testAlreadyCheckedInDoesNotUseExchangeOnlyRecord() {
   assert.equal(result.notifications[0].text, ".network: us**r@example.com, 已签, +?; 12积分, 426天.");
 }
 
+async function testProbeFailureDoesNotFailSuccessfulCheckin() {
+  // 镜像域名网络探测失败（每域名×2 次重试），但本站签到成功：应按成功通知，不抛错。
+  const offline = Array.from({ length: (ORIGIN_COUNT - 1) * 2 }, () => new Error("offline"));
+  const result = await runScript([
+    response({ code: 0, data: { email: "user@example.com", leftDays: "42.0000000000000000" } }),
+    ...offline,
+    response({ list: [{ change: "4.00000000", balance: "194.0000000000000000" }] }),
+    response({ code: 0, points: "194.0000000000000000" }),
+  ]);
+
+  assert.equal(result.error, undefined);
+  assert.equal(result.requests.filter((item) => item.url.endsWith("/api/user/checkin")).length, 1);
+  assert.equal(result.notifications.length, 1);
+  assert.equal(result.notifications[0].title, "GLaDOS 多账号签到完成");
+  const text = result.notifications[0].text;
+  assert.match(text, /\.network: us\*\*r@example\.com, ✅, \+4; 194积分, 42天\./);
+  assert.match(text, /glados\.rocks：登录状态检查失败/);
+}
+
+async function testStringNumbersFromApiAreFormatted() {
+  // 后端把数字字段序列化为字符串（如 leftDays/change/balance/points），显示时不应出现原始长串。
+  const result = await runScript([
+    ...statusScan({
+      network: response({
+        code: 0,
+        data: { email: "user@example.com", leftDays: "32.0000000000000000" },
+      }),
+    }),
+    response({
+      code: 1,
+      message: "Today's observation logged. Return tomorrow for more points.",
+      list: [{
+        business: "system:checkin",
+        change: "12.00000000",
+        balance: "290.0000000000000000",
+        detail: "2026-08-26",
+      }],
+    }),
+    response({ code: 0, points: "294.0000000000000000" }),
+  ]);
+
+  assert.equal(result.error, undefined);
+  assert.equal(result.notifications[0].text, ".network: us**r@example.com, 已签, +12; 294积分, 32天.");
+  assert.doesNotMatch(result.notifications[0].text, /000000/);
+}
+
+async function testMultiAccountSuccessWithProbeFailures() {
+  const offline = Array.from({ length: (ORIGIN_COUNT - 2) * 2 }, () => new Error("offline"));
+  const result = await runScript([
+    response({ code: 0, data: { email: "first@example.com", leftDays: 100 } }),
+    response({ code: 0, data: { email: "second@example.com", leftDays: 200 } }),
+    ...offline,
+    response({ list: [{ change: 5, balance: 50 }] }),
+    response({ code: 0, points: "50.0000000000000000" }),
+    response({ message: "Please Try Tomorrow", code: 1, points: 0 }),
+    response({ code: 0, points: "150.0000000000000000" }),
+  ]);
+
+  assert.equal(result.error, undefined);
+  assert.equal(result.notifications[0].title, "GLaDOS 多账号签到完成");
+  assert.match(result.notifications[0].text, /登录状态检查失败/);
+}
+
 async function testNeedsLogin() {
   // All main-site domains report not logged in (no retry on 200).
   const result = await runScript(
@@ -598,6 +661,9 @@ async function testAdditionalRemoteNotificationChannels() {
   await testFindsSessionOnAdditionalMainDomains();
   await testChecksInDifferentAccountsAcrossDomains();
   await testDeduplicatesSameAccountAcrossDomains();
+  await testProbeFailureDoesNotFailSuccessfulCheckin();
+  await testStringNumbersFromApiAreFormatted();
+  await testMultiAccountSuccessWithProbeFailures();
   await testMultiAccountPartialFailureContinuesAndSummarizes();
   await testAlreadyCheckedIn();
   await testAlreadyCheckedInChineseMessage();

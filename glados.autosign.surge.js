@@ -14,7 +14,7 @@ const SUPPORTED_ORIGINS = [
 ];
 const ORIGIN_HOST_RE =
   /^https:\/\/(glados\.(?:network|rocks|one|space|cloud|vip)|glados-facility\.com)(?:\/|$)/i;
-const SCRIPT_VERSION = "reliability-20260718-dynamic-token";
+const SCRIPT_VERSION = "reliability-20260826-checkin-record-filter";
 const MAX_REQUEST_ATTEMPTS = 2;
 const RETRY_DELAY = 1500;
 
@@ -222,12 +222,34 @@ function isAlreadyCheckedIn(result) {
   );
 }
 
+function localDateKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function findCheckinRecord(result) {
+  const records = Array.isArray(result && result.list)
+    ? result.list.filter((record) => record && typeof record === "object")
+    : [];
+  const checkinRecords = records.filter((record) => record.business === "system:checkin");
+
+  if (checkinRecords.length > 0) {
+    return checkinRecords.find((record) => record.detail === localDateKey()) || checkinRecords[0];
+  }
+
+  // Older responses did not always include `business`. Keep that format
+  // compatible, but never mistake a typed exchange/collect record for check-in.
+  return records.some((record) => record.business) ? undefined : records[0];
+}
+
 function classifyCheckin(result, liveBalance) {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
     throw new Error("GLaDOS 返回的签到数据无效");
   }
 
-  const record = result.list && result.list[0];
+  const record = findCheckinRecord(result);
   const recordBalance = record && record.balance !== undefined ? record.balance : undefined;
   // 实时余额优先（来自 /api/user/points），缺失时回退签到记录快照，避免显示过期余额。
   const balance = liveBalance !== undefined ? liveBalance : recordBalance;

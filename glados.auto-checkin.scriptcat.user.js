@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GLaDOS自动签到
 // @namespace    https://github.com/Walvez/glados-auto-checkin
-// @version      1.6.0
+// @version      1.7.0
 // @description  在脚本猫后台为不同主站域名中的账号逐一签到；无需复制 Cookie，也无需保持网页打开。
 // @author       Walvez
 // @icon         https://glados.network/favicon.ico
@@ -751,24 +751,39 @@ async function run() {
     }
   }
 
-  if (sessions.length === 1 && failures.length === 0 && probeErrors.length === 0) {
-    const [result] = results;
-    const text = resultLine(result);
-    GM_notification({
-      title: "GLaDOS 签到结果",
-      text,
-    });
-    await sendRemoteNotifications(`GLaDOS · ${result.account}`, text);
-    return `${result.account}：${result.message}`;
+  // 镜像域名探测失败（网络不通等）不应否定已成功的签到：降级为提示行，不计入异常。
+  const probeLines = probeErrors.map(({ origin, error }) => (
+    `${origin.slice("https://".length)}：登录状态检查失败：${error.message}`
+  ));
+
+  if (results.length > 0 && failures.length === 0) {
+    // 至少一个账号签到成功且无签到级失败：按成功通知（探测问题只作附注）。
+    if (results.length === 1 && probeLines.length === 0) {
+      const [result] = results;
+      const text = resultLine(result);
+      GM_notification({
+        title: "GLaDOS 签到结果",
+        text,
+      });
+      await sendRemoteNotifications(`GLaDOS · ${result.account}`, text);
+      return `${result.account}：${result.message}`;
+    }
+
+    const lines = results.map(resultLine);
+    lines.push(...probeLines);
+    const title = "GLaDOS 多账号签到完成";
+    const summary = [...lines].join("\n");
+
+    GM_notification({ title, text: summary });
+    await sendRemoteNotifications(title, summary);
+    return summary;
   }
 
   const lines = results.map(resultLine);
   failures.forEach(({ account, error }) => lines.push(`${account}：失败：${error.message}`));
-  probeErrors.forEach(({ origin, error }) => {
-    lines.push(`${origin.slice("https://".length)}：登录状态检查失败：${error.message}`);
-  });
+  lines.push(...probeLines);
 
-  const issueCount = failures.length + probeErrors.length;
+  const issueCount = failures.length;
   const title = sessions.length === 1 && failures.length === 1 && probeErrors.length === 0
     ? "GLaDOS 签到失败"
     : issueCount > 0
@@ -788,10 +803,7 @@ async function run() {
   await sendRemoteNotifications(title, summary);
 
   if (issueCount > 0) {
-    const details = [
-      ...failures.map(({ account, error }) => `${account}：${error.message}`),
-      ...probeErrors.map(({ origin, error }) => `${origin}：${error.message}`),
-    ].join("；");
+    const details = failures.map(({ account, error }) => `${account}：${error.message}`).join("；");
     const error = new Error(`多账号签到未全部完成：${issueCount} 项异常${details ? `；${details}` : ""}`);
     error.alreadyNotified = true;
     throw error;

@@ -505,7 +505,7 @@ function testWorkflowYamlStructure() {
 
 function testPackageScriptsAndVersion() {
   const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8"));
-  assert.equal(pkg.version, "1.6.0");
+  assert.equal(pkg.version, "1.7.0");
   assert.match(pkg.scripts.test, /test-glados-actions/);
   assert.match(pkg.scripts["checkin"], /cli\/checkin\.js/);
 }
