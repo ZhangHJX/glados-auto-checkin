@@ -44,7 +44,7 @@ const {
  * Kept free of "=" pairs so redactSecrets cannot mangle the hint text.
  */
 const COOKIE_REFRESH_HINT =
-  "处理建议：Cookie 会在数周后失效。请在 GLaDOS 网页重新登录，从请求标头复制完整 Cookie 值（含 koa:sess 与 koa:sess.sig 两个字段），更新 Repository Secret `GLADOS_COOKIE`。";
+  "处理建议：gld:sess 有效期约 14 天，过期后需在 GLaDOS 网页重新登录，从浏览器应用面板复制 gld:sess 与 gld:sess.sig 两个字段（koa:sess 已被服务端弃用，复制它无效），更新 Repository Secret `GLADOS_COOKIE`。";
 
 /**
  * Log-safe account label. Users often name an account after its email address;
